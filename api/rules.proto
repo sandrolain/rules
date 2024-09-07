@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package rules;
+
+option go_package = "github.com/sandrolain/rules/api";
+
+service RulesService {
+  rpc SetPolicy(SetPolicyRequest) returns (SetPolicyResponse) {}
+  rpc ListPolicies(ListPoliciesRequest) returns (ListPoliciesResponse) {}
+  rpc GetPolicy(GetPolicyRequest) returns (GetPolicyResponse) {}
+  rpc DeletePolicy(DeletePolicyRequest) returns (DeletePolicyResponse) {}
+}
+
+message Policy {
+  string id = 1;
+  string name = 2;
+  string expression = 3;
+  repeated Rule rules = 4;
+}
+
+message Rule {
+  string name = 1;
+  string expression = 2;
+}
+
+message SetPolicyRequest {
+  Policy policy = 1;
+}
+
+message SetPolicyResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message ListPoliciesRequest {}
+
+message ListPoliciesResponse {
+  repeated Policy policies = 1;
+}
+
+message GetPolicyRequest {
+  string id = 1;
+}
+
+message GetPolicyResponse {
+  Policy policy = 1;
+}
+
+message DeletePolicyRequest {
+  string id = 1;
+}
+
+message DeletePolicyResponse {
+  bool success = 1;
+  string error = 2;
+}

@@ -1,0 +1,9 @@
+# Env
+.env
+
+# Buf
+.buf/
+
+# Test coverage
+coverage.out
+coverage.html

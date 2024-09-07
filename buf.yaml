@@ -1,0 +1,16 @@
+version: v1
+name: github.com/sandrolain/rules
+deps:
+  - buf.build/googleapis/googleapis
+breaking:
+  use:
+    - FILE
+lint:
+  use:
+    - DEFAULT
+  except:
+    - PACKAGE_VERSION_SUFFIX
+    - SERVICE_SUFFIX
+build:
+  excludes:
+    - google
