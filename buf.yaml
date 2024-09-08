@@ -2,6 +2,7 @@ version: v1
 name: github.com/sandrolain/rules
 deps:
   - buf.build/googleapis/googleapis
+  - buf.build/bufbuild/protovalidate
 breaking:
   use:
     - FILE
