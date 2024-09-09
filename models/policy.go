@@ -8,8 +8,8 @@ import (
 type Policy struct {
 	ID              string
 	Name            string
+	Expression      string
 	Rules           []Rule
-	Expression      string // Changed from CELExpression
 	CompiledProgram cel.Program
 }
 

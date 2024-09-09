@@ -45,11 +45,13 @@ func (re *RuleEngine) AddPolicy(policy models.Policy) error {
 
 	// Compile all rules
 	for i, rule := range policy.Rules {
-		program, err := utils.BuildExpression(re.env, rule.Expression, rule.Name)
-		if err != nil {
-			return fmt.Errorf("error compiling rule %s: %v", rule.Name, err)
+		if rule.CompiledProgram == nil {
+			program, err := utils.BuildExpression(re.env, rule.Expression, rule.Name)
+			if err != nil {
+				return fmt.Errorf("error compiling rule %s: %v", rule.Name, err)
+			}
+			policy.Rules[i].CompiledProgram = program
 		}
-		policy.Rules[i].CompiledProgram = program
 	}
 
 	re.policies[policy.ID] = policy
@@ -65,21 +67,7 @@ func (re *RuleEngine) GetPolicy(id string) (models.Policy, error) {
 }
 
 func (re *RuleEngine) EvaluateRule(rule models.Rule, input map[string]interface{}) (bool, error) {
-	if rule.CompiledProgram == nil {
-		return false, fmt.Errorf("rule %s has no compiled program", rule.Name)
-	}
-
-	out, _, err := rule.CompiledProgram.Eval(map[string]interface{}{"input": input})
-	if err != nil {
-		return false, fmt.Errorf("error evaluating rule %s: %v", rule.Name, err)
-	}
-
-	result, ok := out.Value().(bool)
-	if !ok {
-		return false, fmt.Errorf("result of rule %s is not a boolean", rule.Name)
-	}
-
-	return result, nil
+	return rule.Evaluate(input)
 }
 
 func (re *RuleEngine) EvaluatePolicy(policyID string, input map[string]interface{}) (bool, error) {
@@ -91,7 +79,7 @@ func (re *RuleEngine) EvaluatePolicy(policyID string, input map[string]interface
 	for _, rule := range policy.Rules {
 		result, err := re.EvaluateRule(rule, input)
 		if err != nil {
-			return false, err
+			return false, fmt.Errorf("error evaluating rule %s: %v", rule.Name, err)
 		}
 		if !result {
 			return false, nil // If a rule fails, the entire policy fails

@@ -187,3 +187,15 @@ func convertModelToProtoRules(modelRules []models.Rule) []*Rule {
 	}
 	return rules
 }
+
+// Add these structs at the beginning of the file
+type PolicyResult struct {
+	PolicyID string `json:"policy_id"`
+	Result   bool   `json:"result"`
+	Error    string `json:"error,omitempty"`
+}
+
+type InputAck struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
