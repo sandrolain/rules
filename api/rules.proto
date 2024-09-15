@@ -6,11 +6,17 @@ import "buf/validate/validate.proto";
 
 option go_package = "github.com/sandrolain/rules/api";
 
+message Threshold {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  int64 value = 2; // Cambiato da int32 a int64 per rappresentare un int in Go
+}
+
 message Policy {
   string id = 1 [(buf.validate.field).string.min_len = 1];
   string name = 2 [(buf.validate.field).string.min_len = 1];
   string expression = 3;
   repeated Rule rules = 4;
+  repeated Threshold thresholds = 5;
 }
 
 message Rule {
@@ -52,4 +58,21 @@ message DeletePolicyResponse {
 
 message ErrorResponse {
   string error = 1;
+}
+
+message RuleResult {
+  int64 score = 1;
+  bool stop = 2;
+  bool executed = 3;
+}
+
+message PolicyResult {
+  string policy_id = 1;
+  string result_threshold = 2;
+  string error = 3;
+  repeated RuleResult rule_results = 4;
+}
+
+message PolicyResults {
+  repeated PolicyResult results = 1;
 }

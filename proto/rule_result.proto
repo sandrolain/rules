@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "github.com/sandrolain/rules/proto";
+
+message RuleResult {
+  int64 score = 1;
+  bool stop = 2;
+}

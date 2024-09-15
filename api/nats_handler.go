@@ -2,11 +2,12 @@ package api
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/bufbuild/protovalidate-go"
 	"github.com/nats-io/nats.go"
 	"github.com/sandrolain/rules/engine"
-	"github.com/sandrolain/rules/models" // Aggiungi questa importazione
+	"github.com/sandrolain/rules/models" // Add this import
 	"google.golang.org/protobuf/proto"
 )
 
@@ -56,24 +57,35 @@ func (h *NatsHandler) HandleRequests() error {
 func (h *NatsHandler) handleSetPolicy(msg *nats.Msg) {
 	var req SetPolicyRequest
 	if err := proto.Unmarshal(msg.Data, &req); err != nil {
-		h.replyWithError(msg, err)
+		slog.Error("Error unmarshalling SetPolicy request", "error", err)
+		if err := h.replyWithError(msg, err); err != nil {
+			slog.Error("Error sending error response", "error", err)
+		}
 		return
 	}
 
 	if err := h.validator.Validate(&req); err != nil {
-		h.replyWithError(msg, err)
+		slog.Error("Error validating SetPolicy request", "error", err)
+		if err := h.replyWithError(msg, err); err != nil {
+			slog.Error("Error sending error response", "error", err)
+		}
 		return
 	}
 
 	policy := convertProtoToModelPolicy(req.Policy)
 	err := h.ruleEngine.AddPolicy(policy)
 	if err != nil {
-		h.replyWithError(msg, err)
+		slog.Error("Error adding policy", "error", err)
+		if err := h.replyWithError(msg, err); err != nil {
+			slog.Error("Error sending error response", "error", err)
+		}
 		return
 	}
 
 	resp := &SetPolicyResponse{Success: true}
-	h.replyWithProto(msg, resp)
+	if err := h.replyWithProto(msg, resp); err != nil {
+		slog.Error("Error sending response", "error", err)
+	}
 }
 
 func (h *NatsHandler) handleListPolicies(msg *nats.Msg) {
@@ -84,67 +96,95 @@ func (h *NatsHandler) handleListPolicies(msg *nats.Msg) {
 	for i, p := range policies {
 		resp.Policies[i] = convertModelToProtoPolicy(p)
 	}
-	h.replyWithProto(msg, resp)
+	if err := h.replyWithProto(msg, resp); err != nil {
+		slog.Error("Error sending response", "error", err)
+	}
 }
 
 func (h *NatsHandler) handleGetPolicy(msg *nats.Msg) {
 	var req GetPolicyRequest
 	if err := proto.Unmarshal(msg.Data, &req); err != nil {
-		h.replyWithError(msg, err)
+		slog.Error("Error unmarshalling GetPolicy request", "error", err)
+		if err := h.replyWithError(msg, err); err != nil {
+			slog.Error("Error sending error response", "error", err)
+		}
 		return
 	}
 
 	if err := h.validator.Validate(&req); err != nil {
-		h.replyWithError(msg, err)
+		slog.Error("Error validating GetPolicy request", "error", err)
+		if err := h.replyWithError(msg, err); err != nil {
+			slog.Error("Error sending error response", "error", err)
+		}
 		return
 	}
 
 	policy, err := h.ruleEngine.GetPolicy(req.Id)
 	if err != nil {
-		h.replyWithError(msg, err)
+		slog.Error("Error retrieving policy", "error", err)
+		if err := h.replyWithError(msg, err); err != nil {
+			slog.Error("Error sending error response", "error", err)
+		}
 		return
 	}
 
 	resp := &GetPolicyResponse{
 		Policy: convertModelToProtoPolicy(policy),
 	}
-	h.replyWithProto(msg, resp)
+	if err := h.replyWithProto(msg, resp); err != nil {
+		slog.Error("Error sending response", "error", err)
+	}
 }
 
 func (h *NatsHandler) handleDeletePolicy(msg *nats.Msg) {
 	var req DeletePolicyRequest
 	if err := proto.Unmarshal(msg.Data, &req); err != nil {
-		h.replyWithError(msg, err)
+		slog.Error("Error unmarshalling DeletePolicy request", "error", err)
+		if err := h.replyWithError(msg, err); err != nil {
+			slog.Error("Error sending error response", "error", err)
+		}
 		return
 	}
 
 	if err := h.validator.Validate(&req); err != nil {
-		h.replyWithError(msg, err)
+		slog.Error("Error validating DeletePolicy request", "error", err)
+		if err := h.replyWithError(msg, err); err != nil {
+			slog.Error("Error sending error response", "error", err)
+		}
 		return
 	}
 
 	err := h.ruleEngine.DeletePolicy(req.Id)
 	if err != nil {
-		h.replyWithError(msg, err)
+		slog.Error("Error deleting policy", "error", err)
+		if err := h.replyWithError(msg, err); err != nil {
+			slog.Error("Error sending error response", "error", err)
+		}
 		return
 	}
 
 	resp := &DeletePolicyResponse{Success: true}
-	h.replyWithProto(msg, resp)
+	if err := h.replyWithProto(msg, resp); err != nil {
+		slog.Error("Error sending response", "error", err)
+	}
 }
 
-func (h *NatsHandler) replyWithError(msg *nats.Msg, err error) {
+func (h *NatsHandler) replyWithError(msg *nats.Msg, err error) error {
 	errResp := &ErrorResponse{Error: err.Error()}
-	h.replyWithProto(msg, errResp)
+	return h.replyWithProto(msg, errResp)
 }
 
-func (h *NatsHandler) replyWithProto(msg *nats.Msg, resp proto.Message) {
+func (h *NatsHandler) replyWithProto(msg *nats.Msg, resp proto.Message) error {
+	if msg.Reply == "" {
+		slog.Warn("The message has no reply subject")
+		return nil
+	}
+
 	data, err := proto.Marshal(resp)
 	if err != nil {
-		fmt.Printf("Error marshaling response: %v\n", err)
-		return
+		return fmt.Errorf("error serializing the response: %v", err)
 	}
-	msg.Respond(data)
+	return msg.Respond(data)
 }
 
 // Helper functions to convert between proto and model types
@@ -154,6 +194,7 @@ func convertProtoToModelPolicy(p *Policy) models.Policy {
 		Name:       p.Name,
 		Expression: p.Expression,
 		Rules:      convertProtoToModelRules(p.Rules),
+		Thresholds: convertProtoToModelThresholds(p.Thresholds),
 	}
 }
 
@@ -168,12 +209,24 @@ func convertProtoToModelRules(protoRules []*Rule) []models.Rule {
 	return rules
 }
 
+func convertProtoToModelThresholds(protoThresholds []*Threshold) []models.Threshold {
+	thresholds := make([]models.Threshold, len(protoThresholds))
+	for i, t := range protoThresholds {
+		thresholds[i] = models.Threshold{
+			ID:    t.Id,
+			Value: t.Value,
+		}
+	}
+	return thresholds
+}
+
 func convertModelToProtoPolicy(p models.Policy) *Policy {
 	return &Policy{
 		Id:         p.ID,
 		Name:       p.Name,
 		Expression: p.Expression,
 		Rules:      convertModelToProtoRules(p.Rules),
+		Thresholds: convertModelToProtoThresholds(p.Thresholds),
 	}
 }
 
@@ -188,11 +241,15 @@ func convertModelToProtoRules(modelRules []models.Rule) []*Rule {
 	return rules
 }
 
-// Add these structs at the beginning of the file
-type PolicyResult struct {
-	PolicyID string `json:"policy_id"`
-	Result   bool   `json:"result"`
-	Error    string `json:"error,omitempty"`
+func convertModelToProtoThresholds(modelThresholds []models.Threshold) []*Threshold {
+	thresholds := make([]*Threshold, len(modelThresholds))
+	for i, t := range modelThresholds {
+		thresholds[i] = &Threshold{
+			Id:    t.ID,
+			Value: int64(t.Value), // Converted from int to int64
+		}
+	}
+	return thresholds
 }
 
 type InputAck struct {

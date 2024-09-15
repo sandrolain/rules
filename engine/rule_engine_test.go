@@ -3,6 +3,8 @@ package engine
 import (
 	"testing"
 
+	"github.com/sandrolain/rules/cel"
+	rcel "github.com/sandrolain/rules/cel"
 	"github.com/sandrolain/rules/models"
 	"github.com/stretchr/testify/assert"
 )
@@ -11,8 +13,21 @@ func TestNewRuleEngine(t *testing.T) {
 	re, err := NewRuleEngine()
 	assert.NoError(t, err)
 	assert.NotNil(t, re)
-	assert.NotNil(t, re.env)
+	assert.NotNil(t, re.policyEnv)
+	assert.NotNil(t, re.ruleEnv)
 	assert.NotNil(t, re.policies)
+}
+
+func TestCreatePolicyEnv(t *testing.T) {
+	env, err := rcel.CreatePolicyEnv()
+	assert.NoError(t, err)
+	assert.NotNil(t, env)
+}
+
+func TestCreateRuleEnv(t *testing.T) {
+	env, err := rcel.CreateRuleEnv()
+	assert.NoError(t, err)
+	assert.NotNil(t, env)
 }
 
 func TestRuleEngine_AddPolicy(t *testing.T) {
@@ -30,7 +45,7 @@ func TestRuleEngine_AddPolicy(t *testing.T) {
 				Name:       "ValidPolicy",
 				Expression: "true",
 				Rules: []models.Rule{
-					{Name: "Rule1", Expression: "input.value > 10"},
+					{Name: "Rule1", Expression: "Result(10, false)"},
 				},
 			},
 			expectError: false,
@@ -104,60 +119,62 @@ func TestRuleEngine_GetPolicy(t *testing.T) {
 }
 
 func TestRuleEngine_EvaluateRule(t *testing.T) {
-	re, _ := NewRuleEngine()
+	ruleEnv, _ := cel.CreateRuleEnv()
 
 	tests := []struct {
 		name           string
 		rule           models.Rule
 		input          map[string]interface{}
-		expectedResult bool
+		expectedResult models.RuleResult
 		expectError    bool
 	}{
 		{
 			name:           "Simple true rule",
-			rule:           models.Rule{Name: "TrueRule", Expression: "true"},
+			rule:           models.Rule{Name: "TrueRule", Expression: "Result(10, false)"},
 			input:          map[string]interface{}{},
-			expectedResult: true,
+			expectedResult: models.RuleResult{Score: 10, Stop: false, Passed: true, Executed: true},
 			expectError:    false,
 		},
 		{
 			name:           "Simple false rule",
-			rule:           models.Rule{Name: "FalseRule", Expression: "false"},
+			rule:           models.Rule{Name: "FalseRule", Expression: "Result(0, true)"},
 			input:          map[string]interface{}{},
-			expectedResult: false,
+			expectedResult: models.RuleResult{Score: 0, Stop: true, Passed: true, Executed: true},
 			expectError:    false,
 		},
 		{
 			name:           "Input-dependent rule (true case)",
-			rule:           models.Rule{Name: "InputRule", Expression: "input.value > 10"},
+			rule:           models.Rule{Name: "InputRule", Expression: "Result(input.value, input.value > 10)"},
 			input:          map[string]interface{}{"value": 15},
-			expectedResult: true,
+			expectedResult: models.RuleResult{Score: 15, Stop: true, Passed: true, Executed: true},
 			expectError:    false,
 		},
 		{
 			name:           "Input-dependent rule (false case)",
-			rule:           models.Rule{Name: "InputRule", Expression: "input.value > 10"},
+			rule:           models.Rule{Name: "InputRule", Expression: "Result(input.value, input.value > 10)"},
 			input:          map[string]interface{}{"value": 5},
-			expectedResult: false,
+			expectedResult: models.RuleResult{Score: 5, Stop: false, Passed: true, Executed: true},
 			expectError:    false,
 		},
 		{
 			name:           "Invalid rule",
 			rule:           models.Rule{Name: "InvalidRule", Expression: "this is not a valid expression"},
 			input:          map[string]interface{}{},
-			expectedResult: false,
+			expectedResult: models.RuleResult{},
 			expectError:    true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.rule.BuildProgram(re.env)
-			if err != nil {
-				assert.True(t, tt.expectError)
+			err := tt.rule.BuildProgram(ruleEnv)
+			if tt.expectError {
+				assert.Error(t, err)
+				return
 			}
+			assert.NoError(t, err)
 
-			result, err := re.EvaluateRule(tt.rule, tt.input)
+			result, err := tt.rule.Evaluate(tt.input)
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -176,58 +193,77 @@ func TestRuleEngine_EvaluatePolicy(t *testing.T) {
 		Name:       "TestPolicy",
 		Expression: "input.age >= 18",
 		Rules: []models.Rule{
-			{Name: "CountryRule", Expression: "input.country in ['US', 'CA', 'UK']"},
-			{Name: "ScoreRule", Expression: "input.score > 70"},
+			{Name: "CountryRule", Expression: "Result(10, input.country in ['US', 'CA', 'UK'])"},
+			{Name: "ScoreRule", Expression: "Result(input.score, input.score > 70)"},
+		},
+		Thresholds: []models.Threshold{
+			{ID: "low", Value: 0},
+			{ID: "medium", Value: 15},
+			{ID: "high", Value: 25},
 		},
 	}
 	re.AddPolicy(policy)
 
 	tests := []struct {
-		name           string
-		input          map[string]interface{}
-		expectedResult bool
-		expectError    bool
+		name              string
+		input             map[string]interface{}
+		expectedThreshold string
+		expectedResults   []models.RuleResult
+		expectError       bool
 	}{
 		{
-			name:           "All rules pass",
-			input:          map[string]interface{}{"age": 25, "country": "US", "score": 80},
-			expectedResult: true,
-			expectError:    false,
+			name:              "All rules stop",
+			input:             map[string]interface{}{"age": 25, "country": "US", "score": 80},
+			expectedThreshold: "low",
+			expectedResults: []models.RuleResult{
+				{Score: 10, Stop: true, Passed: true, Executed: true},
+				{Score: 0, Stop: false, Passed: false, Executed: false},
+			},
+			expectError: false,
 		},
 		{
-			name:           "Country rule fails",
-			input:          map[string]interface{}{"age": 25, "country": "FR", "score": 80},
-			expectedResult: false,
-			expectError:    false,
+			name:              "Country rule not stop",
+			input:             map[string]interface{}{"age": 25, "country": "FR", "score": 80},
+			expectedThreshold: "high",
+			expectedResults: []models.RuleResult{
+				{Score: 10, Stop: false, Passed: true, Executed: true},
+				{Score: 80, Stop: true, Passed: true, Executed: true},
+			},
+			expectError: false,
 		},
 		{
-			name:           "Score rule fails",
-			input:          map[string]interface{}{"age": 25, "country": "US", "score": 60},
-			expectedResult: false,
-			expectError:    false,
+			name:              "Score rule fails",
+			input:             map[string]interface{}{"age": 25, "country": "US", "score": 60},
+			expectedThreshold: "low",
+			expectedResults: []models.RuleResult{
+				{Score: 10, Stop: true, Passed: true, Executed: true},
+				{Score: 0, Stop: false, Passed: false, Executed: false},
+			},
+			expectError: false,
 		},
 		{
-			name:           "Invalid input type",
-			input:          map[string]interface{}{"age": "not a number", "country": "US", "score": "not a number"},
-			expectedResult: false,
-			expectError:    true,
+			name:            "Invalid input type",
+			input:           map[string]interface{}{"age": "not a number", "country": "US", "score": "not a number"},
+			expectedResults: nil,
+			expectError:     true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := re.EvaluatePolicy("test_policy", tt.input)
+			threshold, results, err := re.EvaluatePolicy("test_policy", tt.input)
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
-				assert.Equal(t, tt.expectedResult, result)
+				assert.Equal(t, tt.expectedThreshold, threshold)
+				assert.Equal(t, tt.expectedResults, results)
 			}
 		})
 	}
 
 	t.Run("Non-existing policy", func(t *testing.T) {
-		_, err := re.EvaluatePolicy("non_existing_policy", map[string]interface{}{})
+		_, _, err := re.EvaluatePolicy("non_existing_policy", map[string]interface{}{})
 		assert.Error(t, err)
 	})
 }

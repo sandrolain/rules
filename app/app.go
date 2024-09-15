@@ -8,6 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/nats-io/nats.go"
 	"github.com/sandrolain/rules/api"
 	"github.com/sandrolain/rules/engine"
@@ -102,16 +104,61 @@ func (a *App) setupStreams() error {
 	}
 
 	for _, s := range streams {
-		_, err := a.js.AddStream(&nats.StreamConfig{
-			Name:     s.name,
-			Subjects: s.subjects,
-		})
-		if err != nil {
-			return fmt.Errorf("error creating stream %s: %w", s.name, err)
+		// Check if the stream already exists
+		stream, err := a.js.StreamInfo(s.name)
+		if err != nil && err != nats.ErrStreamNotFound {
+			return fmt.Errorf("error retrieving stream info for %s: %w", s.name, err)
+		}
+
+		if stream == nil {
+			// The stream doesn't exist, create it
+			_, err = a.js.AddStream(&nats.StreamConfig{
+				Name:      s.name,
+				Subjects:  s.subjects,
+				Retention: nats.InterestPolicy,
+			})
+			if err != nil {
+				return fmt.Errorf("error creating stream %s: %w", s.name, err)
+			}
+			a.logger.Info("Stream created", "name", s.name, "subjects", s.subjects)
+		} else {
+			// The stream already exists, check if we need to update it
+			needsUpdate := false
+			if !equalStringSlices(stream.Config.Subjects, s.subjects) {
+				stream.Config.Subjects = s.subjects
+				needsUpdate = true
+			}
+			if stream.Config.Retention != nats.InterestPolicy {
+				stream.Config.Retention = nats.InterestPolicy
+				needsUpdate = true
+			}
+
+			if needsUpdate {
+				_, err = a.js.UpdateStream(&stream.Config)
+				if err != nil {
+					return fmt.Errorf("error updating stream %s: %w", s.name, err)
+				}
+				a.logger.Info("Stream updated", "name", s.name, "subjects", s.subjects)
+			} else {
+				a.logger.Info("Stream already exists and is correct", "name", s.name)
+			}
 		}
 	}
 
 	return nil
+}
+
+// Funzione di utilità per confrontare slice di stringhe
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) setupInputSubscription() (*nats.Subscription, error) {
@@ -133,7 +180,7 @@ func (a *App) handleInput(m *nats.Msg) {
 		shouldExecute, err := policy.ShouldExecute(input)
 		if err != nil {
 			a.logger.Error("Error evaluating CEL expression", "error", err, "policy_id", policy.ID)
-			results = append(results, api.PolicyResult{PolicyID: policy.ID, Result: false, Error: err.Error()})
+			results = append(results, api.PolicyResult{PolicyId: policy.ID, ResultThreshold: "", Error: err.Error()})
 			break
 		}
 
@@ -142,29 +189,47 @@ func (a *App) handleInput(m *nats.Msg) {
 			continue
 		}
 
-		result, err := a.ruleEngine.EvaluatePolicy(policy.ID, input)
+		result, ruleResults, err := a.ruleEngine.EvaluatePolicy(policy.ID, input)
 		if err != nil {
 			a.logger.Error("Error evaluating policy", "error", err, "policy_id", policy.ID)
-			results = append(results, api.PolicyResult{PolicyID: policy.ID, Result: false, Error: err.Error()})
+			results = append(results, api.PolicyResult{PolicyId: policy.ID, ResultThreshold: "", Error: err.Error()})
 			break
 		}
 
-		results = append(results, api.PolicyResult{PolicyID: policy.ID, Result: result})
-		if !result {
-			break
+		apiRuleResults := make([]*api.RuleResult, len(ruleResults))
+		for i, rr := range ruleResults {
+			apiRuleResults[i] = &api.RuleResult{
+				Score:    rr.Score,
+				Stop:     rr.Stop,
+				Executed: rr.Executed,
+			}
 		}
 
-		a.logger.Info("Policy result", "policy_id", policy.ID, "result", result)
+		results = append(results, api.PolicyResult{
+			PolicyId:        policy.ID,
+			ResultThreshold: result,
+			RuleResults:     apiRuleResults,
+		})
+
+		a.logger.Info("Policy result", "policy_id", policy.ID, "result", result, "rule_results", ruleResults)
 	}
 
-	resultsJSON, err := json.Marshal(results)
+	resultsPtr := make([]*api.PolicyResult, len(results))
+	for i := range results {
+		resultsPtr[i] = &results[i]
+	}
+
+	resultsProto := &api.PolicyResults{
+		Results: resultsPtr,
+	}
+	resultsData, err := proto.Marshal(resultsProto)
 	if err != nil {
 		a.logger.Error("Error marshaling results", "error", err)
 		a.sendInputAck(m, false, "Error marshaling results")
 		return
 	}
 
-	if _, err := a.js.Publish(a.cfg.NatsOutputSubject, resultsJSON); err != nil {
+	if _, err := a.js.Publish(a.cfg.NatsOutputSubject, resultsData); err != nil {
 		a.logger.Error("Error publishing results", "error", err)
 		a.sendInputAck(m, false, "Error publishing results")
 		return

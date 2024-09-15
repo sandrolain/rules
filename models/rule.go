@@ -22,15 +22,64 @@ func (r *Rule) BuildProgram(env *cel.Env) error {
 	return nil
 }
 
-func (r *Rule) Evaluate(input map[string]interface{}) (bool, error) {
+func (r *Rule) Evaluate(input map[string]interface{}) (RuleResult, error) {
 	if r.CompiledProgram == nil {
-		return false, fmt.Errorf("compiled program is nil")
+		return RuleResult{}, fmt.Errorf("compiled program is nil")
 	}
 
-	result, _, err := r.CompiledProgram.Eval(map[string]interface{}{"input": input})
+	out, _, err := r.CompiledProgram.Eval(map[string]interface{}{
+		"input": input,
+	})
 	if err != nil {
-		return false, err
+		return RuleResult{}, err
 	}
 
-	return result.Value().(bool), nil
+	switch value := out.Value().(type) {
+	case int64:
+		return RuleResult{
+			Score:    value,
+			Stop:     false,
+			Passed:   true,
+			Executed: true,
+		}, nil
+	case float64:
+		return RuleResult{
+			Score:    int64(value),
+			Stop:     false,
+			Passed:   true,
+			Executed: true,
+		}, nil
+	case bool:
+		return RuleResult{
+			Score:    0,
+			Stop:     false,
+			Passed:   value,
+			Executed: true,
+		}, nil
+	case map[string]interface{}:
+		score, ok := value["value"].(int64)
+		if !ok {
+			if floatScore, ok := value["value"].(float64); ok {
+				score = int64(floatScore)
+			} else {
+				return RuleResult{}, fmt.Errorf("invalid score value")
+			}
+		}
+		stop, _ := value["stop"].(bool)
+		return RuleResult{
+			Score:    score,
+			Stop:     stop,
+			Passed:   true,
+			Executed: true,
+		}, nil
+	default:
+		return RuleResult{}, fmt.Errorf("unsupported result type")
+	}
+}
+
+type RuleResult struct {
+	Score    int64
+	Stop     bool
+	Passed   bool
+	Executed bool
 }
